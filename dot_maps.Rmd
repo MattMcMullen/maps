@@ -1,0 +1,471 @@
+---
+title: "Dot maps"
+output: html_notebook
+---
+
+```{r}
+library(leaflet)
+library(tidyverse)
+library(lubridate)
+library(htmltools)
+library(rtweet)
+library(readxl)
+library(broom)
+library(plotly)
+library(DT)
+
+```
+
+### Leaflet
+
+Leaflet is a package that creates interactive maps that you can move around in and zoom, just like Google maps. When you publish the R notebook to a web page, it will behave just like you'd expect a web map. The basic commands you need are below. Call leaflet() and then addTiles(). Tiles are the little map pictures with the city and street names and the usual information you would expect from a map.
+
+```{r}
+leaflet() %>% 
+  addTiles()
+```
+
+
+This looks a little weird, but you can manually set the map's starting point with setView(). It takes latitude, longitude, and zoom level, like this: setView(lng = x, lat = y, zoom = z).
+
+When you look up a location's coordinates, they look like this, from Billings' Wikipedia page: "Coordinates: 45°47′12″N 108°32′14″W". You have to do a few things to make it understandable to R. 
+
+1. For longitude, West is negative and East is positive; for latitude, South is negative and North is positive.   
+2. The 47 in 45°47′12″N is minutes, so it's a number out of 60. 47/60 = .78. The 12 is seconds, but I'll just round the .78 up to .80. The 32'14" after the 108 would be 32/60 = .53, again rounding up for the 14" makes it about .55. So all that translates to lat = 45.8, long = -108.55.  
+
+For zoom, 1 is about at the global level, 3 is about at the continent level, 5 is about at a country level, and 10 is about at a large city level.
+
+So to center on Billings, add this line:   setView(lat = 45.80, lng = -108.55, zoom = 11)
+Don't forget the pipe.
+
+```{r}
+leaflet() %>% 
+  addTiles()
+
+```
+
+
+
+
+
+
+We can add a marker to a location with addMarkers() or addCircleMarkers(). To show Montana and place a dot at Billings, use the lat/lng we got for Billings above.
+Add the following line:  addMarkers(lat = 45.80, lng = -108.55)
+
+```{r}
+leaflet() %>% 
+  addTiles() %>% 
+  setView(lat = 45.75, lng = -108.5, zoom = 6)
+  
+
+```
+
+
+Wikipedia gives the coordinates for Bozeman as: 45°40′40″N 111°2′50″W. 
+
+Convert that (approximately) to a decimal lat/lng as above, and put the answer here:
+
+
+Add both the Billings and your new Bozeman locations on the following map. You don't need a setView() command, because leaflet will automatically center the map on any markers you give it.
+
+Add a second addMarkers() line below for Bozeman:
+
+```{r}
+leaflet() %>% 
+  addTiles() %>%
+  addMarkers(lat = 45.80, lng = -108.55) 
+
+```
+
+
+### Plotting points from a data set
+
+Leaflet will also take a data file with many lat/lng points, and plot them all with one call to addMarkers().
+
+There's a website called Socrata (https://moto.data.socrata.com) that has many cities' crime reports with lat/lng coordinates. Here's one that has several years of crime reports from Colorado Springs: https://moto.data.socrata.com/dataset/Colorado-Springs-CO-Crime-Dataset/8fii-jbse. You can download the file directly from that website with this:
+
+```{r}
+co_springs_crime <- read_csv("https://moto.data.socrata.com/api/views/8fii-jbse/rows.csv?accessType=DOWNLOAD")
+```
+
+
+
+(I get some error messages but it works well enough to use the data.)
+
+This is a very large dataset, with over 20,000 crime incidents (who knew Colorado Springs was so crime-ridden?). So let's just focus on incidents from 2016 (there about about 2000). To do this, we need to be able to see the year. One of the columns is incident_datetime, and looks like this: 09/25/2015 04:29:00 AM.
+
+We can use the function mdy_hms() from the lubridate package, which will take the above data and convert it into something R can understand as a date and time. Other functions like ymd_hms() would convert other common formats.
+
+Then we pull the year out with year() and filter for 2016, and save that as a new dataset called co_spring_crime_2016:
+
+```{r}
+
+co_springs_crime_2016 <- co_springs_crime %>% 
+  filter(year(mdy_hms(incident_datetime)) == 2016)
+
+co_springs_crime_2016
+
+```
+
+Leaflet will take a data frame and automatically look for latitude and longitude columns. Then when you call addCircleMarkers() it will plot little circles at every lat-long location in the dataset. Just add the crime data inside the leaflet() parentheses, and use addMarkers() or, as in this case, addCircleMarkers(). You don't even need to put anything in the parentheses, as long as the column names in the data are something like lat and long.
+
+Add the line addCircleMarkers() to the end of the following code:
+
+```{r}
+co_springs_crime_2016 %>% 
+  leaflet() %>% 
+  addTiles() 
+
+
+```
+
+
+You can also modify the look of the circles. I think they're a little too big, and I don't like the border around them. Copy and paste the chunk above, and inside the addCircleMarkers() parentheses, add the following: stroke = F, fillOpacity = .6, radius = 5.
+
+```{r}
+
+
+```
+
+
+
+You can create a popup with some information that comes up when the user clicks on a marker with popup = ~address_1. Copy-paste the chunk above and put that popup line in with the other options inside addCircleMarkers. The ~ in front of address_1 is a tilde, and is usually on the upper left of the keyboard. It precedes a variable in leaflet, in this case, the address, which changes from dot to dot.
+
+```{r}
+
+
+```
+
+Now when you click on a circle, you'll get the address. Copy-paste the above chunk and replace address_1 with a description of the type of crime. There are a few variables in the dataset that you could pick; look at the dataset, find the name of the column you want, and replace ~address_1 with it.
+
+```{r}
+
+```
+
+
+Another option is to use a label, which will pop up when you hover over the dot, without needing to click it. Copy-paste the code above and replace the word 'popup' with the word 'label.'
+
+```{r}
+
+```
+
+
+
+### Mapping tweets
+
+Sometimes people add their location to their tweets. If we can get those, we could map them with leaflet.
+
+With the rtweet package's search_tweets() function, you can add a geocode with latitutde, longitude, and a radius around that point. For example, "45.80,-108.55,20mi" uses our coordinates for Billings to make a circle with a 20 mile radius around Billings to get tweets.
+
+Then, we use rtweet's function lat_lng(), which extracts the coordinates from tweets when they're available.
+
+Here's the code to authenticate rtweet. You would go to https://developer.twitter.com, and then to your app to get the codes. Then delete the codes from here once it's working.
+
+```{r}
+token <- create_token(
+  app = "",
+  consumer_key = "",
+  consumer_secret = "",
+  access_token = "",
+  access_secret = "")
+
+get_token()        # this shows the token. make sure key is the same as consumer_key above
+```
+
+
+
+Make sure you don't put any spaces between any of the information in quotes in the geocode =.
+
+```{r}
+bl_tweets <- search_tweets(geocode = "45.80,-108.55,20mi", n = 10000)
+
+bl_tweets <- lat_lng(bl_tweets)
+
+```
+
+
+Do the following: call leaflet() and pass it bl_tweets, next use addTiles(), then use addCircleMarkers() and popup the content of the tweet, which is in a variable called 'text'.
+
+Most people do not put their locations in their tweets, but hopefully enough people will that we can see some on the map.
+
+
+
+
+
+
+
+
+
+
+
+When you have done that with Billings, choose another location, set the lat/lng and the radius, and then collect the tweets and map them as above.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Mass shootings
+
+Tha magazine Mother Jones has been keeping a database of mass shootings in the US, starting in 1980, and updating (unfortunately) regularly. They keep the data in a google docs spreadsheet here:
+https://docs.google.com/spreadsheets/d/1b9o6uDO18sLxBqPwl_Gh9bnhW-ev_dABH83M5Vb5L8o/
+
+See their writing about the data here:
+https://www.motherjones.com/politics/2012/07/mass-shootings-map/
+
+
+To obtain the data with read_csv(), I put 'export?format=csv' at the end of the url to force google docs to convert it:
+
+```{r}
+shootings <- read_csv("https://docs.google.com/spreadsheets/d/1b9o6uDO18sLxBqPwl_Gh9bnhW-ev_dABH83M5Vb5L8o/export?format=csv")
+```
+
+Use glimpse() on shootings to see the variables.
+
+
+
+
+
+
+Create a datatable() of the shootings, with the following variables included using select(): case, location, date, fatalities, total_victims, and age_of_shooter.
+
+
+
+
+
+
+
+We can start by looking at some basic statistics. For example, use count() on prior_signs_mental_health_issues to see how many of the offenders had mental health issues.
+
+
+
+
+
+
+
+
+
+
+
+
+Notice that there are several categories that are similar: TBD, Unclear, Unknown, and -.
+
+Let's combine those categories. The following code will first convert the variable to a factor, and then use fct_collapse() to combine those into one variable called Unknown.
+
+```{r}
+shootings %>% 
+  mutate(prior_signs_mental_health_issues = as_factor(prior_signs_mental_health_issues)) %>% 
+  mutate(prior_signs_mental_health_issues = fct_collapse(prior_signs_mental_health_issues,
+                                                         Unknown = c("-", "TBD", "Unclear", "Unknown"))) %>% 
+  count(prior_signs_mental_health_issues)
+```
+
+
+
+
+
+
+Next, this uses plotly to create a histogram of the number of fatalities per incident:
+
+```{r}
+shootings %>% 
+  plot_ly(x = ~fatalities) %>% 
+  add_histogram()
+
+```
+
+
+Create another histogram of the age of the shooter.
+
+
+
+
+
+
+
+
+
+
+The following will find the median age of the shooter:
+
+```{r}
+shootings %>% 
+  summarize(median_age_of_shooter = median(age_of_shooter))
+```
+
+
+
+
+
+
+
+Create a heatmap of the age and race of the shooter with add_histogram2dcontour(). In plot_ly(), set x and y to ~age_of_shooter and ~race.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Using regression to test hypotheses
+# Has the number of fatalities per incident increased over time?
+
+Regression is a statistical method for examining the relationship between two variables (or more than two in the case of multiple regression).
+
+One hypothesis that we can test with these shootings data is that the number of fatalities in each shooting has increased over time. Perhaps guns that can shoot more bullets have become more common, leading to larger numbers of victims per shooting.
+
+First we need to set up the data by calculating the number of fatalities per incident. 
+
+
+
+```{r}
+fatalities_data <- shootings %>%                                       # start with the shootings data
+  group_by(year) %>%                                                   # we're going to count by year
+  summarize(count = n(), fatalities = sum(fatalities)) %>%             # get the total number of fatalities per year
+  mutate(fatalities_per_incident = fatalities/count)                   # divide by the number of shooting incidents
+
+fatalities_data
+```
+
+
+But there's a problem: As the article explains, the federal guidelines for a mass shooting changed in 2013 from a minimum of 4 fatalities to a minimum of 3 fatalities, and this database also changed. Therefore, our conclusions could be misleading. So let's filter out all shootings with less than 4 fatalities so we keep the criteria the same for all years.
+
+Copy-paste the above chunk but add the following line as the second line:
+filter(fatalities > 3)
+
+
+
+
+
+
+To create the regression model, use lm() for linear model. The format looks like this:
+your_model <- lm(your_y_variable ~ your_x_variable, data = your_data)
+
+
+```{r}
+fatalities_per_incident_model <- lm(fatalities_per_incident ~ year, data = fatalities_data)
+
+```
+
+Nothing will appear yet because we've just saved the model.
+We can print out the model, but it only gives minimal information as is:
+
+
+```{r}
+fatalities_per_incident_model
+```
+
+This gives us the a and b that we can plug into the equation y = bx + a. For my data (it could have changed when you do it), I got the equation y = (.0399)x + (-71.6089). This is the equation for the regression line, and can be used to predict values. For example, how many fatalities per incident should we expect for 2020? Setting x to 2020, we get y = (.04)(2020) + (-71.61) = 9.19.
+
+But that doesn't tell us much yet. How sizable is the relationship, is it statistically significant, etc.?
+
+To get some more information, we can use tidy(your_model) and glance(your_model) from the broom package:
+
+```{r}
+tidy(fatalities_per_incident_model)
+glance(fatalities_per_incident_model)
+```
+
+
+
+The first table with tidy() has rows for (Intercept) and year, and then some statistics on each. Under estimate you should see the same values that we got above. The p-value of year tells us whether year is a statistically significant predictor of fatalities per incident. In my data, it was not, because the p-value was not less than .05.
+
+The second table with glance() has some summary statistics on the model as a whole. The r-squared is pretty small, .01 for me, which is not a strong relationship. You can get the correlation (r) by taking the square root of the r-squared if you want to know the correlation itself. The p-value should be the same as on the previous page. In short, our model is not very good: The number of fatalities per incident has not changed over time.
+
+
+### Graphing the model
+
+Let's use plotly to create a graph. This will create a basic scatterplot:
+
+```{r}
+fatalities_data %>% 
+  plot_ly(x = ~year, 
+          y = ~fatalities_per_incident) %>% 
+  add_markers()
+
+
+```
+
+
+To put the regression line into the graph, use add_lines() and put our regression model into the parentheses. Do this by copy-pasting the above chunk and creating a new line: 
+add_lines(y = ~fitted(fatalities_per_incident_model))
+
+
+
+
+
+
+
+
+
+
+Let's clean that up a little.  
+1. Get rid of the legend with 'trace 0' and 'trace 1' by adding showlegend = F inside the parentheses of add_markers  
+2. Add a new line with layout(), and inside the parentheses put the following:
+   title = "Number of fatalities per shooting by year",
+   xaxis = list(title = "Year"),
+   yaxis = list(title = "Number of fatalities per shooting")
+3. inside plot_ly(), add the following to clean up the information that pops up:
+   hoverinfo = "text", text = ~paste("Fatalities per shooting: ", fatalities_per_incident, "<br>", "Year: ", year)
+
+
+
+
+
+
+
+
+
+
+
+
+
+Assignment: Shootings.
+
+For your notebook, do some further analyses on the shootings data.
+
+1. Create a map of the shootings.
+There are columns called latitude and longitude in the data that can generate dots on a map of where the shootings took place.
+A. Because there was a shooting in Hawaii, the map is spread out a lot by default. Center on the continental US by looking up the center of the continental US, translating it to computer, finding a good zoom level, and using setView(lng = x, lat = y, zoom = z).  
+B. Change the size of the dots so that the more victims, the larger the dot on the map. You can do this by setting radius = ~fatalities or radius = ~total_victims inside of addCircleMarkers(). If the dots are too big, you can do something like radius = ~total_victims/10, or radius = ~log(total_victims). I like that last one because larger numbers are reduced more than smaller ones.
+
+
+2. Report some additional statistics, including:  
+A. Median number of total_victims and median number of fatalities.  
+B. A histogram of the number of shootings per year. You will want to set nbinsx = 40 inside add_histogram(), because that is the approx. number of years covered by the data.  
+C. Heatmaps with add_histogram2dcontour() of the gender and race of the shooter, and the gender and age of the shooter. You'll notice some problems with the data that you'll need to fix with fct_collapse().  
+D. A scatterplot with plotly of the number injured by the number of fatalities in the shooting. 
+
+
+3. Conduct a regression analysis testing the hypothesis that the number of shootings has increased over the years.
+
+To create the regression model, y = the number of shootings and x = year, you need to set up the data like this:
+
+```{r}
+num_per_year <- shootings %>% 
+  filter(fatalities > 3) %>% 
+  count(year) %>% 
+  filter(year < 2019)
+
+num_per_year
+```
+
+In your regression model, y = n and x = year.
+

@@ -1,0 +1,349 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+The choropleths.Rmd notebook was getting long already, so I split this from it. It introduces the Montana 2018 election data which will be used in your published assignment.
+
+There are two theories about Montana politics that I want us to test with these election results:  
+1. That more densely-populated areas and cities vote for Democrats, and more sparsely-populated and rural areas vote for Republicans, and   
+2. that the further West you go in the state, the more Democrats there are, and the further East, the more Republicans.  
+
+I will run through these hypotheses using he US House race with Gianforte (R) the winner and Williams (D). You will do your own notebook with Tester (D) the winner and Rosendale (R).
+
+
+```{r}
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(readxl)
+library(DT)
+library(plotly)
+library(broom)
+library(tidycensus)
+```
+
+First you will need to upload the election data. Go to the MT secretary of state website here:  http://mtelectionresults.gov
+
+Then go to Election Resources at the bottom of the page, and then Statewide and County Exports, and then STATEWIDE EXPORT.
+
+Then upload the spreadsheet to Files in RStudio. It should be called "Statewide Results.xlsx."
+
+In this spreadheet, sheet 2 is the 2018 US House race that we'll use here. Sheet 1 is the Senate race that you'll use for your analysis after this.  
+
+It's an Excel file, so we use read_xlsx(). This won't work quite right, but we'll fix it next:
+```{r}
+house_counties <- read_xlsx("Statewide Results.xlsx", sheet = 2)
+```
+
+Click on house_counties in the Global Environment, and see how the sheet isn't all data. There's some info in the first several rows, and the last row has a total. The range of the actual data is B7:E63.
+
+```{r}
+house_counties <- read_xlsx("Statewide Results.xlsx", sheet = 2, range = "B7:E63")
+```
+
+Use glimpse() to view house_counties.
+
+```{r}
+glimpse(house_counties)
+```
+
+
+Notice that some of the column names are weird and long. Let's change those with rename() so they're easier to reference:
+
+```{r}
+house_counties <- house_counties %>% 
+  rename(Republican = "GREG GIANFORTE\r\nRepublican") %>% 
+  rename(Democrat = "KATHLEEN WILLIAMS\r\nDemocrat") %>% 
+  rename(Libertarian = "ELINOR SWANSON\r\nLibertarian")
+```
+
+Now glimpse() again to nake sure that worked.
+
+
+
+
+We want to know the Republican - Democrat difference in each county, as a percentage.
+
+The following code has three mutate() commands
+1. add up the total votes cast in the county  
+2. subtract the proportion of votes cast for the Dem from the proportion of votes cast for the Repub  
+3. multiply it by 100 to make it a percentage, and round it to 1 digit  
+
+
+```{r}
+house_counties <- house_counties %>% 
+  mutate(total_votes = Republican + Democrat + Libertarian) %>% 
+  mutate(Repub_advantage = Republican/total_votes - Democrat/total_votes) %>% 
+  mutate(Repub_advantage = round(Repub_advantage*100, 1))
+
+house_counties %>% 
+  arrange(-Repub_advantage)
+
+```
+
+
+
+### Get census data for mapping
+
+Now that we have the election data prepared, we need census data for the map of the state and the populations in each county.
+
+1. We get the map data by setting geometry = TRUE, and  
+2. we get population data with variables = "B01003_001"
+
+
+```{r}
+mt_counties <- get_acs(geography = "county",
+                       variables = "B01003_001",
+                       state = "MT",
+                       geometry = TRUE) 
+```
+
+Because we're going to join the two datasets, we need to make sure they're consistent with one another. One problem is that the names of the counties are a little different between the census data and the election data: 'Lewis and Clark' in the census data is 'Lewis & Clark' in the election data.
+
+In addition, in the census data all the county names include the word County and Montana, like "Yellowstone County, Montana" whereas in the election data it's called simply "Yellowstone."
+
+The following code changes both of those, and also changes the census column called estimate to Population, which we will use later:
+
+```{r}
+
+house_counties[25, "County"] <- "Lewis and Clark"              # Changes  "&" "and"
+
+mt_counties <- mt_counties %>% 
+  mutate(County = gsub(" County, Montana", "", NAME)) %>%      # Removes unnecessary words
+  rename(Population = estimate)                                # Renames the 'estimate' to 'Population'
+```
+
+
+This joins the election data with the map data into a new dataset called house_election
+
+```{r}
+house_election <- mt_counties %>% 
+  full_join(house_counties)
+```
+
+
+
+The following will make a nice table for displaying results. The as.tibble() command removes the geometry, which is not standard table format.
+
+
+```{r}
+house_election %>%
+  as_tibble() %>% 
+  select(County, Population, Democrat, Republican, Libertarian, total_votes, Repub_advantage) %>% 
+  datatable()
+
+```
+
+
+
+
+### Montana counties choropleth
+
+This is based on the code from the previous notebook.
+
+```{r}
+
+vote_colors <- colorNumeric(palette = "viridis", domain = house_election$Repub_advantage)
+
+house_election %>%
+  leaflet() %>% 
+  addTiles() %>%
+  addPolygons(weight = 1,
+              fillColor = ~vote_colors(Repub_advantage), 
+              label = ~paste0(County, ", Republican advantage = ", Repub_advantage),
+              highlight = highlightOptions(weight = 2)) %>% 
+  setView(-110, 47, zoom = 6) %>% 
+  addLegend(pal = vote_colors, values = ~Repub_advantage)
+
+```
+
+
+
+
+
+
+### Predicting votes from population
+
+One theory is that Democrats do better in more populated counties, and Republicans do better in more rural and less populated counties. That's true of Democrats and Republicans at the national level - Democrats win in highly-populated cities and Republicans win in sparsely-populated rural areas. 
+
+Now let's make a plotly graph.
+
+```{r}
+house_election %>%
+  plot_ly(x = ~Population, y = ~Repub_advantage) %>% 
+  add_markers()
+```
+
+
+
+Create better hover information and add title and better axis labels.
+
+
+```{r}
+house_election %>%
+  plot_ly(x = ~Population, 
+          y = ~Repub_advantage,
+          hoverinfo = "text", 
+          text = ~paste("County:", 
+                        County, "<br>", 
+                        "Population: ", Population, "<br>", 
+                        "Republican advantage: ", Repub_advantage)) %>% 
+  add_markers(marker = list(opacity = 0.7)) %>%
+  layout(title = "Predicting Republican Vote Advantage from Population, by County",
+         xaxis = list(title = "County population"),
+         yaxis = list(title = "Republican vote advantage"))     
+                
+```
+
+
+
+
+
+Linear model or linear regression  lm(y ~ x, data)
+
+To create the regression model, use lm() for linear model. Call it pop_model for population model.  
+
+
+```{r}
+pop_model <- lm(Repub_advantage ~ Population, data = house_election)
+
+```
+
+The "old-fashioned" way to get the statistics out of this in R is to use summary. Put pop_model in summary() below:
+
+
+```{r}
+summary(pop_model)
+```
+
+A more modern approach is to use some of the functions from the broom package, tidy() and glance(), because it sets up the output in a cleaner way. But most of the same information is there. Use both tidy() and glance() on pop_model below:
+
+```{r}
+tidy(pop_model)
+glance(pop_model)
+
+
+```
+
+R-squared is around .20, which means 20% of the variance in vote can be accounted for by population. To get the correlation, take the square root of .20, which is about .4. That's a decent size, and it is statistically significant, so we this analysis shows support for our hypothesis that smaller the population, the greater the Republican vote advantage.  
+
+
+To plot the regression line onto the chart, copy-paste the code from the plotly chart above, and do the following. Don't forget the pipe.  
+1. add_lines(y = ~fitted(pop_model))  That will plot the line.  
+2. add showlegend = F inside add_markers().  That will remove an unnecessary label given to the line.  
+
+
+
+
+
+
+
+
+
+### Predicting vote from longitude
+
+A common belief about Montana politics is that the further West you go, the more Democrats there are, and the further East you go, the more Republicans. We can do a statistical test of this hypothesis by getting the longitude of each county and using that to predict Tester's vote. 
+
+
+Figure the center of each county.
+
+To be honest I don't completely know what's going on with the code below, but basically it's getting the center of the area with st_centroid and then getting the coordinates with st_coordinates. The longitude (West-East) is the x-axis, so X, and the latitude (North-South) is the y-axis. I had to search the internet to figure out how to do it, and however it does it, it seems to work.
+
+```{r}
+house_election <- house_election %>% 
+  mutate(Longitude = as_tibble(st_coordinates(st_centroid(house_election$geometry)))$X) %>% 
+  mutate(Latitude = as_tibble(st_coordinates(st_centroid(house_election$geometry)))$Y)
+  
+```
+
+When I run that code, I get an error saying that "st_centroid does not give correct centroids for longitude/latitude data," so let's check it with a quick map. This creates the map and then uses addCircleMarkers() to place dots in the centers of the counties that we found with st_centroid().
+
+```{r}
+
+house_election %>%
+  leaflet() %>% 
+  addTiles() %>%
+  addPolygons(weight = 1) %>% 
+  setView(-110, 47, zoom = 6) %>% 
+addCircleMarkers(~Longitude, ~Latitude)
+
+```
+
+Despite the error, those dots look pretty close to the centers of each county to me. 
+
+Here's a quick plotly graph of the Longitude and the election results. Here we're looking for a positive correlation, because as the Longitude goes East (to the right on the graph), you should find more Republican votes.
+
+
+```{r}
+house_election %>%
+  plot_ly(x = ~Longitude, y = ~Repub_advantage) %>% 
+  add_markers()
+```
+
+
+Now let's do the linear regression predicting Republican vote from Longitude.  
+
+```{r}
+longitude_lm <- lm(Repub_advantage ~ Longitude, data = house_election)
+tidy(longitude_lm)
+glance(longitude_lm)
+```
+
+
+The r-squared is similar to the previous: .18, giving a correlation of about .4 (actually -.4). This means that the more West you go, the more Democratic votes you get.
+
+This next chunk puts the line on the graph, adds titles, etc.
+
+
+```{r}
+house_election %>% 
+  plot_ly(x = ~Longitude, 
+          y = ~Repub_advantage,
+          hoverinfo = "text", 
+          text = ~paste("County:", County, "<br>", "Longitude: ", Longitude, "<br>", "Republican advantage: ", Repub_advantage)) %>% 
+  add_markers(marker = list(opacity = 0.7), showlegend = F) %>%
+  layout(title = "Predicting Republican Vote Advantage from Longitude, by County",
+         xaxis = list(title = "County longitude"),
+         yaxis = list(title = "Republican vote advantage")) %>% 
+  add_lines(y = ~fitted(longitude_lm))
+                
+
+```
+
+
+
+### Multiple regression
+
+Finally let's do a multiple regression, predicting the Republican advantage from both Population and Longitude simultaneously.
+
+
+```{r}
+multiple_lm <- lm(Repub_advantage ~ Population + Longitude, data = house_election)
+tidy(multiple_lm)
+glance(multiple_lm)
+```
+
+The tidy() command shows that both Population and Longitude remain statistically significant when examined simultaneously.
+
+When we just have two variables, x & y, we can use a 2-dimensional scatterplot. So what do we do with three variables? A 3D scatterplot, of course! This is really cool, because you can spin it around to see it from different angles.
+
+```{r}
+house_election %>% 
+  plot_ly(x = ~Longitude, y = ~Population, z = ~Repub_advantage, 
+          text = ~County, hoverinfo = "text") %>% 
+  add_markers(opacity = .7, showlegend = F)
+```
+
+
+
+
+
+Assignment: 2016 US Senate Montana election: Tester/Rosendale
+
+The Senate election may be an even better test of these two hypotheses, because the election was even closer to 50-50, but this time Tester the Democrat won.
+
+Run through the senate election as we did above with the house election. You can get the data from the same spreadsheet, but it's on sheet = 1.
+
+
+

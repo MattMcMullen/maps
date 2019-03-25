@@ -1,0 +1,254 @@
+---
+title: "Choropleth maps"
+output: html_notebook
+---
+
+
+'Choropleth' is an obscure-sounding term, but it is a common type of map where regions are different colors according to some statistic. An example that we have all seen is the US electoral map with red and blue states indicating which candidate or party won each state.
+
+
+```{r}
+library(tidyverse)
+library(tidycensus)      # gets census data that we can use to create maps
+library(leaflet)         # interactive mapping package
+library(gtrendsR)
+```
+
+
+### Census data
+
+We'll start out with census data because it has both the maps and the data (population, income, etc.). Later, we'll separate these steps so we can learn to map any data.
+
+You'll need a free api key to get census access. Go here to get a key:
+
+http://api.census.gov/data/key_signup.html
+
+Then when you get the API key, put it into the quotes in census_api_key("").
+
+```{r}
+census_api_key()
+```
+
+
+This gets maps of the states along with population data from the census bureau:
+```{r}
+
+states <- get_acs(geography = "state",               # gets state by state data
+                  variables = "B01003_001",          # this is state population
+                  geometry = TRUE,                   # gets geometry (the maps)
+                  shift_geo = T)                     # shifts Hawaii and Alaska
+
+```
+
+
+Let's take a look at the data we just got. Create a new chunk below and type in states:
+
+
+
+
+
+
+
+
+
+The data look a little different from our usual data. But note that it has state names under NAME, it has the population of each state under estimate, and geometry provides the data to create the map. So it includes both the map information and the data (population) that we're going to map.
+
+Here's a really simple choropleth map using the data. All it does is take the state data, send it to ggplot, and fill (or color) the states with their population (called estimate).
+
+```{r}
+states %>% 
+  ggplot() +  
+  geom_sf(aes(fill = estimate)) 
+```
+
+
+Let's improve it a little bit. Copy-paste the above chunk, and add the following lines at the end:  
+1. coord_sf(datum = NA) will remove the coordinates from around the map  
+2. scale_fill_viridis_c() will use a better color palette  
+3. theme_minimal() will get rid of the grey background  
+4. labs(title = "") will add the title  
+
+
+
+
+
+Here's another one. The only thing I changed here is variables =, which I changed to get median income. 
+
+```{r}
+state_income <- get_acs(geography = "state", variables = "B19013_001", shift_geo = T, geometry = TRUE)
+
+state_income %>% 
+  ggplot() + 
+  geom_sf(aes(fill = estimate)) + 
+  coord_sf(datum = NA) + 
+  theme_minimal() + 
+  scale_fill_viridis_c() +
+  labs(title = "Median state income")
+```
+
+
+
+These have been maps of states in the country, but we could pick a state and then map the counties in that state. The following creates a map of the median income of counties in Montana. 
+
+```{r}
+
+MT_population <- get_acs(geography = "county", state = "MT", variables = "B19013_001", geometry = TRUE) 
+
+MT_population %>% 
+  ggplot() + 
+  geom_sf(aes(fill = estimate), color = NA) + 
+  coord_sf(datum = NA) + 
+  theme_minimal() + 
+  scale_fill_viridis_c() +
+  labs(title = "Median income of Montana counties")
+
+```
+
+
+
+### Obtaining data from elsewhere
+
+The census package includes the state maps that we can use to map other data. Then we can join some new data to the map data from the census. Data from the google search package gtrendsR has a variable called $interest_by_region which, if we look just at the US, will give us states.
+
+The following code will get the google data on searches for naloxone, which treats opioid overdose, and then shows the state-by-state data.
+
+
+```{r}
+naloxone <- gtrends("naloxone", geo = "US", time = "today 12-m")
+
+naloxone$interest_by_region
+
+```
+
+
+
+In order to map these google search data, we need to join the data with the google searches to the data with the map information (called states).
+
+Notice that in the naloxone data, the states column is called 'location,' but in the census data, the states column is called 'NAME.' In order to join the naloxone search data to the state map data, we have to rename the states colum. Here's how we could do that:
+
+```{r}
+states %>% 
+  rename(location = NAME) %>% 
+  inner_join(naloxone$interest_by_region)
+```
+
+
+Notice that this creates data with a hits column, which is search volume for the term naloxone, along with the geometry that we can use to make a map.
+
+Pipe all that into the following to make the map:
+
+```{r}
+
+
+  ggplot() +                         # create graph
+  geom_sf(aes(fill = hits)) +        # color states with hits
+  scale_fill_viridis_c() +            # use the viridis colors
+  coord_sf(datum = NA) +             # remove coordinates
+  theme_minimal() +                  # remove background
+  labs(title = "State google searches for 'naloxone'", fill = "Search volume")
+```
+
+
+
+
+### Leaflet for interactive maps
+
+We can also use the interactive mapping package leaflet to create these maps. Choropleth maps are harder to create in leaflet, but I think it's worth it.
+
+Make sure you don't shift Hawaii and Alaska. I'm going to call this states_leaflet just to keep it straight. We're not going to use the income data, but get_acs() requires you to get some data.
+
+```{r}
+states_leaflet <- get_acs(geography = "state",       # gets state by state data
+                  variables = "B19013_001",          # this is state income
+                  geometry = TRUE)                   # gets geometry (the maps)
+                  # shift_geo = T                    # shifts Hawaii and Alaska
+
+```
+
+To begin, pipe the states_leaflet data into leaflet(), then use addTiles() to put the map down, and the addPolygons() which will show the outlines of the states from our map data:
+                                            
+```{r}
+states_leaflet %>% 
+  leaflet() %>% 
+  addTiles() %>%
+  addPolygons()
+
+```
+
+
+It works, but it looks pretty ugly. Let's improve this.
+
+1. To get the states to have different colors we need to create a variable. That's the state_colors line at the top.   
+2. Inside addPolygons(), put weight = 1 to make the state boundary lines thinner.  
+3. Also inside addPolygons(), put fill_color = ~state_colors(estimate). That will use the variable created in step 1 to color the states.  
+4. Zoom in to the US with a new line: setView(-95, 40, zoom = 4)  
+5. Add a legend with a new line: addLegend(pal = state_colors, values = ~estimate)
+
+
+```{r}
+
+state_colors <- colorNumeric(palette = "viridis", domain = states_leaflet$estimate)
+
+states_leaflet %>% 
+  leaflet() %>% 
+  addTiles() %>%
+  addPolygons(weight = 1,
+              fillColor = ~state_colors(estimate)) %>% 
+  setView(-95, 40, zoom = 4) %>% 
+  addLegend(pal = state_colors, values = ~estimate)
+```
+
+
+
+
+That's pretty complicated, but I think it looks really nice.
+
+To finish, I'm going to add a few lines inside addPolygons() so that you can hover over the states and get information.
+
+
+```{r}
+
+state_colors <- colorNumeric(palette = "viridis", domain = states_leaflet$estimate)
+
+states_leaflet %>% 
+  leaflet() %>% 
+  addTiles() %>%
+  addPolygons(weight = 1,
+              fillColor = ~state_colors(estimate), 
+              label = ~paste0(NAME, ", income = ", estimate),           
+              highlight = highlightOptions(weight = 2)) %>% 
+  setView(-95, 40, zoom = 4) %>% 
+  addLegend(pal = state_colors, values = ~estimate)
+```
+
+
+
+
+### Joining data to leaflet maps
+
+Let's take this to the next level, joining data and then mapping it with leaflet.
+
+
+Remember to join with states where Alaska and Hawaii have not been shifted!
+
+```{r}
+
+naloxone_colors <- colorNumeric(palette = "viridis", domain = naloxone$interest_by_region$hits)
+
+states_leaflet %>% 
+  rename(location = NAME) %>% 
+  inner_join(naloxone$interest_by_region) %>% 
+  leaflet() %>% 
+  addTiles() %>%
+  addPolygons(weight = 1,
+              fillColor = ~naloxone_colors(hits), 
+              label = ~paste0(location, ", Search volume = ", hits),
+              highlight = highlightOptions(weight = 2)) %>% 
+  setView(-95, 40, zoom = 4) %>% 
+  addLegend(pal = naloxone_colors, values = ~hits)
+```
+
+
+
+Do a new google trends search of your choice. (I think people's secrets are the most interesting to analyze, so I might try "suicide", "porn", or "abortion." But select one of your choice.) Create a leaflet choropleth map of the search rates by state.
+
